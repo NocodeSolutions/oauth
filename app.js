@@ -7,38 +7,36 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // ====== CONFIGURATION ======
-// These values should be set as environment variables in Render or in your local environment.
-// For local development you may use a .env file and the dotenv package.
+// Set these values in your environment (or via a .env file with dotenv)
 const API_KEY = process.env.API_KEY || 'YOUR_API_KEY';
 const CLIENT_SECRET = process.env.CLIENT_SECRET || 'YOUR_CLIENT_SECRET';
 const SCOPES = process.env.SCOPES || 'PRODUCTS_MANAGE,BOOKINGS_CREATE';
-// The callback URL should be set to your deployed application's callback endpoint.
 const REDIRECT_URI = process.env.REDIRECT_URI || 'https://your-render-app-url.com/callback';
-// Set the Bokun host (e.g., "bokun.io" or "bokuntest.com")
+// Use this variable to switch between bokun.io and bokuntest.com (or any other host)
 const BOKUN_HOST = process.env.BOKUN_HOST || 'bokun.io';
 
-// In-memory session store (for demonstration only – use a proper persistent store in production)
+// In-memory session store (for demonstration purposes only)
 const sessions = {};
 
 /**
  * Helper: Verify HMAC signature.
- * - Removes the hmac parameter from the query.
- * - Sorts the remaining keys.
- * - Joins them as key=value pairs separated by &.
- * - Computes a SHA256 HMAC digest using the provided secret.
+ * 1. Removes the 'hmac' parameter.
+ * 2. Sorts the remaining keys alphabetically.
+ * 3. Joins them as key=value pairs separated by '&'.
+ * 4. Computes a SHA256 HMAC digest using the provided secret.
  * Returns true if the computed HMAC matches the provided one.
  */
 function verifyHmac(query, secret) {
-  // Remove the provided hmac field from the query parameters
+  // Extract and remove the 'hmac' parameter from the query object.
   const { hmac: providedHmac, ...params } = query;
-  
-  // Sort the remaining keys alphabetically.
+
+  // Sort the keys alphabetically.
   const sortedKeys = Object.keys(params).sort();
-  
-  // Build the message string: key1=value1&key2=value2...
+
+  // Build the message string in the format key1=value1&key2=value2...
   const message = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
-  
-  // Compute the HMAC digest using SHA256.
+
+  // Compute the HMAC using SHA256 with the provided secret.
   const computedHmac = crypto
     .createHmac('sha256', secret)
     .update(message)
@@ -47,12 +45,13 @@ function verifyHmac(query, secret) {
   console.log('Message for HMAC:', message);
   console.log('Provided HMAC:', providedHmac);
   console.log('Computed HMAC:', computedHmac);
-  
+
   return computedHmac === providedHmac;
 }
 
-// ====== ROUTE 1: Initial Endpoint Called by Bokun ======
-// Example: GET /install?domain=nocodesolutionsltd&hmac=...&timestamp=...&user=3413
+// ====== ROUTE 1: /install ======
+// This route is called by Bokun when a vendor begins installing your app.
+// Example: /install?domain=nocodesolutionsltd&hmac=...&timestamp=...&user=3413
 app.get('/install', (req, res) => {
   const query = req.query;
   console.log('Received /install request with query:', query);
@@ -67,12 +66,10 @@ app.get('/install', (req, res) => {
   // Generate a random nonce to be used as the state parameter.
   const nonce = crypto.randomBytes(16).toString('hex');
 
-  // Save session data (in production, store this in a proper session or database).
+  // Store session data keyed by the nonce.
   sessions[nonce] = { user, domain, timestamp };
 
-  // Construct the Bokun authorization URL using the environment variable for host.
-  // For example, if BOKUN_HOST is "bokun.io", the URL becomes:
-  //   https://{domain}.bokun.io/appstore/oauth/authorize?...
+  // Construct the Bokun authorization URL.
   const authUrl = `https://${domain}.${BOKUN_HOST}/appstore/oauth/authorize?client_id=${API_KEY}` +
     `&scope=${encodeURIComponent(SCOPES)}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
@@ -82,17 +79,20 @@ app.get('/install', (req, res) => {
   res.redirect(authUrl);
 });
 
-// ====== ROUTE 2: Callback Endpoint ======
-// Example: GET /callback?domain=nocodesolutionsltd&nonce=...&timestamp=...&hmac=...&authorization_code=...
+// ====== ROUTE 2: /callback ======
+// Bokun redirects here after the vendor authorizes your app.
+// Note: Bokun sends the nonce back as 'state' and the authorization code as 'code'.
 app.get('/callback', async (req, res) => {
   const query = req.query;
   console.log('Received /callback request with query:', query);
 
-  const { domain, nonce, timestamp, hmac, authorization_code } = query;
+  // Extract parameters from the callback query.
+  // Note: We use 'state' instead of 'nonce'.
+  const { domain, state, timestamp, hmac, code } = query;
 
-  // Check that the nonce exists in our sessions store.
-  if (!nonce || !sessions[nonce]) {
-    return res.status(400).send('Invalid or missing nonce');
+  // Check that the state (our original nonce) exists in our session store.
+  if (!state || !sessions[state]) {
+    return res.status(400).send('Invalid or missing nonce/state');
   }
 
   // Verify the HMAC for the callback request.
@@ -100,26 +100,26 @@ app.get('/callback', async (req, res) => {
     return res.status(400).send('Invalid HMAC on callback request');
   }
 
-  // Construct the access token URL using the environment variable for host.
+  // Construct the URL for exchanging the code for an access token.
   const tokenUrl = `https://${domain}.${BOKUN_HOST}/appstore/oauth/access_token`;
 
   try {
     const tokenResponse = await axios.post(tokenUrl, {
       client_id: API_KEY,
       client_secret: CLIENT_SECRET,
-      code: authorization_code
+      code: code
     });
     const tokenData = tokenResponse.data;
     console.log('Received access token data:', tokenData);
 
-    // Retrieve saved session data.
-    const sessionData = sessions[nonce];
+    // Retrieve the stored session data.
+    const sessionData = sessions[state];
 
-    // Prepare data to store (simulated database).
+    // Prepare the data to "store" (simulate saving to a database).
     const storeData = {
       user: sessionData.user,
       domain: sessionData.domain,
-      nonce,
+      nonce: state,
       access_token: tokenData.access_token,
       scope: tokenData.scope,
       vendor_id: tokenData.vendor_id
@@ -127,11 +127,11 @@ app.get('/callback', async (req, res) => {
 
     console.log('Storing data to webhook (simulated DB):', storeData);
 
-    // POST the data to a webhook endpoint (simulate database storage).
+    // Post the data to a webhook (simulated database storage).
     await axios.post('https://webhook.site/054f59c1-a4f2-493b-b21c-c2c95527df19', storeData);
 
     // Clean up the session.
-    delete sessions[nonce];
+    delete sessions[state];
 
     res.send('App successfully installed and data stored!');
   } catch (error) {
