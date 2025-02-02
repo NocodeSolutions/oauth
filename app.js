@@ -72,7 +72,7 @@ app.get('/install', (req, res) => {
   sessions[nonce] = { user, domain, timestamp };
 
   // Construct the Bokun authorisation URL.
-  const authUrl = `https://${domain}.bokun.io/appstore/oauth/authorize?client_id=${API_KEY}` +
+  const authUrl = `https://${domain}.bokuntest.com/appstore/oauth/authorize?client_id=${API_KEY}` +
     `&scope=${encodeURIComponent(SCOPES)}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
     `&state=${nonce}`;
@@ -101,7 +101,7 @@ app.get('/callback', async (req, res) => {
   }
 
   // Exchange the authorization code for an access token.
-  const tokenUrl = `https://${domain}.bokun.io/appstore/oauth/access_token`;
+  const tokenUrl = `https://${domain}.bokuntest.com/appstore/oauth/access_token`;
 
   try {
     const tokenResponse = await axios.post(tokenUrl, {
