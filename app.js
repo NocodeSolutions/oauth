@@ -28,16 +28,16 @@ const sessions = {};
  * Returns true if the computed HMAC matches the provided one.
  */
 function verifyHmac(query, secret) {
-  // Destructure hmac and leave the rest in params
+  // Remove the provided hmac from the query parameters
   const { hmac: providedHmac, ...params } = query;
-  
-  // Sort the keys alphabetically.
+
+  // Sort the remaining keys alphabetically
   const sortedKeys = Object.keys(params).sort();
-  
-  // Build the message string: key1=value1&key2=value2...
+
+  // Build the message string as: key1=value1&key2=value2...
   const message = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
-  
-  // Compute the HMAC digest.
+
+  // Compute the HMAC using SHA256 and the provided secret
   const computedHmac = crypto
     .createHmac('sha256', secret)
     .update(message)
@@ -46,7 +46,8 @@ function verifyHmac(query, secret) {
   console.log('Message for HMAC:', message);
   console.log('Provided HMAC:', providedHmac);
   console.log('Computed HMAC:', computedHmac);
-  
+
+  // Return true if the computed HMAC exactly matches the provided one
   return computedHmac === providedHmac;
 }
 
