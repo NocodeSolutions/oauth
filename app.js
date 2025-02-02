@@ -1,3 +1,4 @@
+// app.js
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -5,22 +6,37 @@ const app = express();
 
 const port = process.env.PORT || 3000;
 
+// ====== CONFIGURATION ======
+// Set these values in your environment (or via a .env file with dotenv)
 const API_KEY = process.env.API_KEY || 'YOUR_API_KEY';
 const CLIENT_SECRET = process.env.CLIENT_SECRET || 'YOUR_CLIENT_SECRET';
 const SCOPES = process.env.SCOPES || 'PRODUCTS_MANAGE,BOOKINGS_CREATE';
 const REDIRECT_URI = process.env.REDIRECT_URI || 'https://your-render-app-url.com/callback';
+// Use this variable to switch between bokun.io and bokuntest.com (or any other host)
 const BOKUN_HOST = process.env.BOKUN_HOST || 'bokun.io';
 
-// In-memory store for demonstration purposes
+// In-memory session store (for demonstration purposes only)
 const sessions = {};
 
 /**
- * Helper: verifyHmac
+ * Helper: Verify HMAC signature.
+ * 1. Removes the 'hmac' parameter.
+ * 2. Sorts the remaining keys alphabetically.
+ * 3. Joins them as key=value pairs separated by '&'.
+ * 4. Computes a SHA256 HMAC digest using the provided secret.
+ * Returns true if the computed HMAC matches the provided one.
  */
 function verifyHmac(query, secret) {
+  // Extract and remove the 'hmac' parameter from the query object.
   const { hmac: providedHmac, ...params } = query;
+
+  // Sort the keys alphabetically.
   const sortedKeys = Object.keys(params).sort();
+
+  // Build the message string in the format key1=value1&key2=value2...
   const message = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
+
+  // Compute the HMAC using SHA256 with the provided secret.
   const computedHmac = crypto
     .createHmac('sha256', secret)
     .update(message)
@@ -33,85 +49,58 @@ function verifyHmac(query, secret) {
   return computedHmac === providedHmac;
 }
 
-/**
- * ROUTE 1: /install
- * Bokun calls this URL with query params (domain, hmac, timestamp, user).
- */
+// ====== ROUTE 1: /install ======
+// This route is called by Bokun when a vendor begins installing your app.
+// Example: /install?domain=nocodesolutionsltd&hmac=...&timestamp=...&user=3413
 app.get('/install', (req, res) => {
   const query = req.query;
   console.log('Received /install request with query:', query);
 
-  // 1. Verify HMAC
+  // Verify the HMAC of the incoming request.
   if (!verifyHmac(query, CLIENT_SECRET)) {
     return res.status(400).send('Invalid HMAC on install request');
   }
 
   const { domain, user, timestamp } = query;
 
-  // 2. Generate a random nonce and store session data
+  // Generate a random nonce to be used as the state parameter.
   const nonce = crypto.randomBytes(16).toString('hex');
+
+  // Store session data keyed by the nonce.
   sessions[nonce] = { user, domain, timestamp };
 
-  // 3. Build the Bokun authorization URL
+  // Construct the Bokun authorization URL.
   const authUrl = `https://${domain}.${BOKUN_HOST}/appstore/oauth/authorize?client_id=${API_KEY}` +
     `&scope=${encodeURIComponent(SCOPES)}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
     `&state=${nonce}`;
 
-  console.log('Redirecting to Bokun authorization URL:', authUrl);
-
-  // 4. Instead of a direct redirect, send an HTML page with a loading screen
-  //    and a small script that automatically redirects after a short delay.
-  const html = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <title>Redirecting to Bokun</title>
-      <!-- Tailwind CSS via CDN -->
-      <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.2.0/dist/tailwind.min.css" rel="stylesheet">
-      <script>
-        // Redirect after a brief delay (e.g., 1 second), or set it to 0 for immediate redirect
-        setTimeout(function() {
-          window.location.href = "${authUrl}";
-        }, 1000);
-      </script>
-    </head>
-    <body class="bg-gray-100 h-screen flex items-center justify-center">
-      <div class="flex flex-col items-center">
-        <!-- Spinner -->
-        <div class="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-500"></div>
-        <!-- Loading text -->
-        <p class="mt-6 text-lg text-gray-600">Preparing to redirect...</p>
-      </div>
-    </body>
-    </html>
-  `;
-
-  res.send(html);
+  console.log('Redirecting vendor to Bokun authorization URL:', authUrl);
+  res.redirect(authUrl);
 });
 
-/**
- * ROUTE 2: /callback
- * Bokun redirects here after the user authorizes your app.
- */
+// ====== ROUTE 2: /callback ======
+// Bokun redirects here after the vendor authorizes your app.
+// Note: Bokun sends the nonce back as 'state' and the authorization code as 'code'.
 app.get('/callback', async (req, res) => {
   const query = req.query;
   console.log('Received /callback request with query:', query);
 
-  // Bokun sends 'state' instead of 'nonce' in the callback
+  // Extract parameters from the callback query.
+  // Note: We use 'state' instead of 'nonce'.
   const { domain, state, timestamp, hmac, code } = query;
 
-  // Check if the nonce (aka state) exists
+  // Check that the state (our original nonce) exists in our session store.
   if (!state || !sessions[state]) {
     return res.status(400).send('Invalid or missing nonce/state');
   }
 
-  // Verify the HMAC of the callback request
+  // Verify the HMAC for the callback request.
   if (!verifyHmac(query, CLIENT_SECRET)) {
     return res.status(400).send('Invalid HMAC on callback request');
   }
 
-  // Exchange authorization code for an access token
+  // Construct the URL for exchanging the code for an access token.
   const tokenUrl = `https://${domain}.${BOKUN_HOST}/appstore/oauth/access_token`;
 
   try {
@@ -120,14 +109,13 @@ app.get('/callback', async (req, res) => {
       client_secret: CLIENT_SECRET,
       code: code
     });
-
     const tokenData = tokenResponse.data;
     console.log('Received access token data:', tokenData);
 
-    // Retrieve stored session info
+    // Retrieve the stored session data.
     const sessionData = sessions[state];
 
-    // Prepare data to "store"
+    // Prepare the data to "store" (simulate saving to a database).
     const storeData = {
       user: sessionData.user,
       domain: sessionData.domain,
@@ -138,9 +126,13 @@ app.get('/callback', async (req, res) => {
     };
 
     console.log('Storing data to webhook (simulated DB):', storeData);
+
+    // Post the data to a webhook (simulated database storage).
     await axios.post('https://webhook.site/054f59c1-a4f2-493b-b21c-c2c95527df19', storeData);
 
+    // Clean up the session.
     delete sessions[state];
+
     res.send('App successfully installed and data stored!');
   } catch (error) {
     console.error('Error exchanging authorization code for access token:', error.message);
@@ -148,7 +140,7 @@ app.get('/callback', async (req, res) => {
   }
 });
 
-// Start server
+// ====== START THE SERVER ======
 app.listen(port, () => {
   console.log(`Bokun OAuth app listening on port ${port}`);
 });
